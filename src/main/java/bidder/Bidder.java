@@ -54,6 +54,11 @@ final class Bidder implements AutoCloseable {
         this.stats = stats;
         this.clock = clock;
         this.config = config;
+        // Warm the deadline machinery once. completeOnTimeout's timer thread is created lazily, so
+        // on a cold JVM the FIRST request paid ~70 ms of class loading and thread start before its
+        // 20 ms timer even existed: the deadline was missed exactly once. A bidder warms up before
+        // it takes traffic; this is the smallest version of that.
+        CompletableFuture.supplyAsync(() -> 0, workers).completeOnTimeout(0, 1, TimeUnit.MILLISECONDS).join();
     }
 
     /** Entry point for POST /bid. Never throws for a slow pipeline: it times out to a NoBid. */
@@ -112,7 +117,7 @@ final class Bidder implements AutoCloseable {
     private void simulateSlowDependency() {
         if (ThreadLocalRandom.current().nextDouble() >= config.slowFraction()) return;
         try {
-            Thread.sleep(config.deadline().multipliedBy(2));
+            Thread.sleep(config.deadline().multipliedBy(10)); // far past the deadline, so the cut-off is unmistakable
         } catch (InterruptedException e) { // checked exception: the compiler forces us to handle it
             Thread.currentThread().interrupt(); // restore the flag; never swallow an interrupt
         }

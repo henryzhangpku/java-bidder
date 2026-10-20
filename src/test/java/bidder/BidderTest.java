@@ -105,12 +105,14 @@ class BidderTest {
 
     @Test
     void slowPipelineTimesOutToNoBid() {
-        try (var b = bidder(1.0, Duration.ofMillis(20))) { // every request stalls for 2x the deadline
+        try (var b = bidder(1.0, Duration.ofMillis(20))) { // every request stalls for 10x the deadline
             long start = System.nanoTime();
             var resp = assertInstanceOf(NoBid.class, b.bid(request("slow")));
             long tookMs = (System.nanoTime() - start) / 1_000_000;
             assertEquals(Reason.TIMEOUT, resp.reason());
-            assertTrue(tookMs < 35, "answered in " + tookMs + " ms, deadline 20 ms");
+            // Well under the 200 ms stall, so the deadline cut it off. Not "< 25 ms": OS timers fire late
+            // (macOS coalesces timers for background processes: 23-69 ms measured for a 20 ms timer).
+            assertTrue(tookMs < 150, "answered in " + tookMs + " ms; the stall was 200 ms, deadline 20 ms");
         }
     }
 
