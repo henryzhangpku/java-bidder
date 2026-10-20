@@ -7,6 +7,43 @@ index, frequency caps, leased budget slices, a pacing controller, a logistic sco
 shading, and a hard deadline. Plain JDK 21, no frameworks, so what you read is the language.
 About 1,050 lines of main code plus 370 lines of tests.
 
+**Coming back to Java after years of Python?** Read [docs/java-since-2015.md](docs/java-since-2015.md)
+first: what changed from Java 7/8 to 21+, side by side with the Python you know.
+
+## How it fits together
+
+![Architecture: exchange, HttpServer, the five-stage pipeline, BudgetService, background jobs, win path](docs/architecture.svg)
+
+Solid arrows are the hot path inside one bid; dotted arrows are background jobs that only publish
+values the hot path reads (no control loop inside a bid). One auction, start to finish:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant X as Exchange
+    participant H as HttpServer
+    participant B as Bidder
+    participant S as BudgetSlices
+    participant BS as BudgetService
+    X->>H: POST /bid (device, geo, segments, slot, floor)
+    H->>B: bid(request), 20 ms deadline
+    B->>B: match, pace, cap, score, shade
+    B->>S: tryCommit(campaign, bid price)
+    alt local slice too small
+        S->>BS: lease(campaign, slice)
+        BS-->>S: granted (0 means budget gone)
+    end
+    S-->>B: reserved with compare-and-set
+    B-->>X: Bid(campaign, price) or NoBid(reason)
+    alt exchange says we won
+        X->>B: POST /win (auction id, clearing price)
+        B->>S: refund(bid − clearing)
+        Note right of B: a repeated notice returns DUPLICATE and is never charged
+    else no notice within 5 s
+        B->>S: expireLosses refunds the whole bid
+    end
+```
+
 ## Run it (one command)
 
 ```bash

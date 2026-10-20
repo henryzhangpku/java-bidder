@@ -4,104 +4,499 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mini Bidder</title>
+<meta name="description" content="A mini demand-side ad bidder in plain Java 21: targeting, pacing, frequency caps, lock-free budgets, first-price shading.">
 <style>
-  :root { --bg: #fafafa; --fg: #1d1d1f; --muted: #666; --line: #ddd; --bar: #6b4fbb; --warn: #c2410c; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #eee; --muted: #999; --line: #333; --bar: #9b87f5; } }
-  body { background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 900px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  p.sub { color: var(--muted); margin: 0 0 16px; }
-  button { font: inherit; padding: 8px 16px; cursor: pointer; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 16px 0; }
-  .tile { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
-  .tile b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
-  .tile span { color: var(--muted); font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
-  td.num, th.num { text-align: right; }
-  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 80px; }
-  .bar div { height: 100%; background: var(--bar); }
-  .wrap { overflow-x: auto; }
-  #status { color: var(--muted); margin-left: 8px; }
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --raised: #ffffff;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+    --accent: #2a78d6; --accent-soft: #86b6ef; --accent-track: #e8f0fb; --accent-ink: #1c5cab;
+    --good: #0ca30c; --good-ink: #006300; --warn: #fab219; --critical: #d03b3b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --raised: #201f1e;
+      --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+      --accent: #3987e5; --accent-soft: #184f95; --accent-track: #15243a; --accent-ink: #86b6ef;
+      --good-ink: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #201f1e;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --accent: #3987e5; --accent-soft: #184f95; --accent-track: #15243a; --accent-ink: #86b6ef;
+    --good-ink: #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: 0.92em; }
+
+  /* header */
+  header { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between; margin-bottom: 24px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  h1 { font-size: 28px; line-height: 1.2; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .lede { color: var(--ink-2); margin: 0; max-width: 620px; }
+  .head-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+          background: var(--raised); box-shadow: inset 0 0 0 1px var(--ring); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .pill.live .dot { background: var(--good); }
+
+  /* cards */
+  .card { background: var(--surface); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--ring); padding: 20px; }
+  .card h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .card .sub { color: var(--muted); font-size: 13px; margin: 2px 0 16px; }
+  .grid { display: grid; gap: 16px; margin-top: 16px; }
+  .two { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+  @media (max-width: 860px) { .two { grid-template-columns: minmax(0, 1fr); } }
+
+  /* controls */
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  button { font: inherit; font-weight: 550; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer;
+           background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--ring); }
+  button:hover { box-shadow: inset 0 0 0 1px var(--axis); }
+  button.primary { background: var(--accent); color: #fff; box-shadow: none; }
+  button.primary:hover { filter: brightness(1.06); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .progress { flex: 1 1 200px; min-width: 160px; display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+  .track { flex: 1; height: 6px; border-radius: 3px; background: var(--accent-track); overflow: hidden; }
+  .track > div { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.15s; }
+  .explain { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+
+  /* stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-top: 16px; }
+  .tile { background: var(--surface); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--ring); padding: 16px; }
+  .tile .label { color: var(--ink-2); font-size: 13px; }
+  .tile .value { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; margin-top: 4px; line-height: 1.2; }
+  .tile .note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  /* funnel */
+  .funnel { display: grid; gap: 6px; }
+  .frow { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: center; padding: 4px 0; border-radius: 6px; }
+  .frow:hover, .frow:focus-visible { background: var(--accent-track); }
+  .fname { font-size: 13px; color: var(--ink-2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .fbar .bar { height: 20px; background: var(--accent); border-radius: 0 4px 4px 0; min-width: 2px; transition: width 0.3s; }
+  .fbar .val { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .fbar .drop { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .fnote { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+  @media (max-width: 520px) { .frow { grid-template-columns: 104px minmax(0, 1fr); } }
+
+  /* feed */
+  .feed { font-family: var(--mono); font-size: 12px; display: grid; gap: 0; }
+  .ev { display: grid; grid-template-columns: 64px 74px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--grid); align-items: center; }
+  .ev:last-child { border-bottom: 0; }
+  .ev .t, .ev .id { color: var(--muted); }
+  .ev .what { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev .what .dot { width: 8px; height: 8px; }
+  .ev.bid .dot { background: var(--accent); }
+  .ev.won .dot { background: var(--good); }
+  .ev.nobid .what { color: var(--muted); }
+  .ev .tag { font-family: system-ui, sans-serif; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--accent-track); color: var(--accent-ink); }
+  .ev .tag.won { background: transparent; color: var(--good-ink); box-shadow: inset 0 0 0 1px currentColor; }
+  .empty { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+
+  /* campaign table */
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin: -4px 0 12px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th { font-size: 12px; font-weight: 600; color: var(--muted); text-align: left; padding: 0 8px 8px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+  td { padding: 12px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; white-space: nowrap; }
+  .cname { font-weight: 550; }
+  .cmeta { color: var(--muted); font-size: 12px; }
+  .spend { display: flex; height: 12px; background: var(--accent-track); border-radius: 3px; overflow: hidden; min-width: 160px; }
+  .spend > div { height: 100%; }
+  .spend .won { background: var(--accent); }
+  .spend .res { background: var(--accent-soft); border-left: 2px solid var(--surface); }
+  .spend .res:first-child { border-left: 0; }
+  .spendtxt { font-size: 12px; color: var(--ink-2); margin-top: 4px; white-space: nowrap; }
+  .meter { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .meter .m { width: 56px; height: 6px; border-radius: 3px; background: var(--accent-track); overflow: hidden; }
+  .meter .m > div { height: 100%; background: var(--accent); }
+  .meter.low .m > div { background: var(--warn); }
+  .meter.off .m > div { background: var(--critical); }
+
+  /* code map */
+  .map { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .map a { display: block; padding: 14px 16px; border-radius: 10px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--ring); color: var(--ink); }
+  .map a:hover { text-decoration: none; box-shadow: inset 0 0 0 1px var(--accent); }
+  .map .f { font-family: var(--mono); font-size: 12px; color: var(--accent-ink); }
+  .map .s { font-weight: 600; margin: 2px 0; }
+  .map .d { color: var(--ink-2); font-size: 13px; }
+
+  #tip { position: fixed; pointer-events: none; z-index: 10; background: var(--raised); color: var(--ink); padding: 8px 10px;
+         border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12), inset 0 0 0 1px var(--ring); font-size: 12px; display: none; max-width: 260px; }
+  #tip b { font-size: 14px; display: block; }
+  #tip span { color: var(--ink-2); }
+  .diagram { overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; min-width: 900px; height: auto; }
+  footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
-<h1>Mini demand-side bidder</h1>
-<p class="sub">Each click plays an exchange: 1,000 bid requests (50 in flight), wins for ~40% of bids, and ~5% duplicate win notices.</p>
-<p class="sub" id="mode"></p>
-<button id="go">Send 1,000 requests</button><span id="status"></span>
+<div class="wrap">
+
+<header>
+  <div>
+    <p class="eyebrow">Java 21 · real-time ad bidding</p>
+    <h1>Mini demand-side bidder</h1>
+    <p class="lede">An exchange offers an ad slot; the bidder has 20 ms to match campaigns, check pacing, frequency caps and budget, score, shade a first-price bid, and answer.</p>
+  </div>
+  <div class="head-right">
+    <span class="pill" id="mode"><span class="dot"></span><span id="modeText">Connecting…</span></span>
+    <a class="pill" href="https://github.com/henryzhangpku/java-bidder">Source on GitHub →</a>
+  </div>
+</header>
+
+<section class="card">
+  <div class="controls">
+    <button class="primary" id="go1k">Send 1,000 requests</button>
+    <button id="go10k">Send 10,000</button>
+    <button id="reset" hidden>Reset</button>
+    <div class="progress"><div class="track"><div id="bar"></div></div><span id="status">Idle</span></div>
+  </div>
+  <p class="explain" id="explain">This page plays the exchange: random bid requests 50 at a time, a win notice for about 40% of bids, and about 5% of win notices sent twice to prove the bidder never charges twice.</p>
+</section>
 
 <div class="tiles" id="tiles"></div>
-<h2>No-bid reasons</h2>
-<div class="tiles" id="reasons"></div>
-<h2>Campaign spend vs budget</h2>
-<div class="wrap"><table>
-  <thead><tr><th>Campaign</th><th class="num">Budget</th><th class="num">Leased</th><th class="num">Committed</th><th class="num">Won spend</th><th>Won / budget</th><th class="num">Throttle</th></tr></thead>
-  <tbody id="rows"></tbody>
-</table></div>
+
+<div class="grid two">
+  <section class="card">
+    <h2>Where requests go</h2>
+    <p class="sub">Each stage of <code>Bidder.decide()</code>, and how many requests it drops</p>
+    <div class="funnel" id="funnel"></div>
+    <p class="fnote" id="fnote"></p>
+  </section>
+  <section class="card">
+    <h2>Live auctions</h2>
+    <p class="sub">Most recent first</p>
+    <div class="feed" id="feed"><div class="empty">Send requests to see auctions here.</div></div>
+  </section>
+</div>
+
+<section class="card" style="margin-top:16px">
+  <h2>Campaign budgets</h2>
+  <p class="sub">Spend against budget. Pacing lowers the throttle when a campaign spends ahead of its daily line (a "day" is 5 minutes here).</p>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--accent)"></i>Won spend</span>
+    <span><i class="sw" style="background:var(--accent-soft)"></i>Reserved by open bids</span>
+    <span><i class="sw" style="background:var(--accent-track)"></i>Remaining budget</span>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Campaign</th><th>Spend</th><th class="num">Budget</th><th class="num">Leased</th><th class="num">Throttle</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+</section>
+
+<section class="card" style="margin-top:16px">
+  <h2>How it fits together</h2>
+  <p class="sub">Solid arrows are the hot path inside one bid. Dotted arrows are background jobs that only publish values the hot path reads.</p>
+  <div class="diagram"><svg viewBox="0 0 1240 376" role="img" aria-label="Architecture: the exchange posts bids to HttpServer, which runs the five-stage pipeline (match, pace, frequency cap, score and shade, reserve budget) under a 20 ms deadline. Reserve leases slices from BudgetService. Background jobs refresh the index, update pacing throttles and release lost bids. Win notices go to Bidder.win, which refunds the reservation and counts the impression.">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="ahp"/></marker>
+<marker id="ahd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="ahpd"/></marker>
+</defs>
+<style>
+.node, .job { fill: var(--raised); stroke: var(--axis); stroke-width: 1; }
+.stage { fill: var(--raised); stroke: var(--accent); stroke-width: 1.5; }
+.grp { fill: var(--accent-track); }
+.bg { fill: none; stroke: var(--axis); stroke-width: 1; }
+.t { fill: var(--ink); font: 600 14px system-ui, -apple-system, sans-serif; text-anchor: middle; }
+.s { fill: var(--muted); font: 12px system-ui, -apple-system, sans-serif; text-anchor: middle; }
+.sm { fill: var(--accent-ink); font: 12px ui-monospace, Menlo, Consolas, monospace; text-anchor: middle; }
+.gl { fill: var(--ink-2); font: 600 12px ui-monospace, Menlo, Consolas, monospace; }
+.note { fill: var(--muted); font: 12px system-ui, -apple-system, sans-serif; }
+.lbl { fill: var(--ink-2); font: 12px system-ui, -apple-system, sans-serif; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.solid { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
+.dotted { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.ahp { fill: var(--ink-2); } .ahpd { fill: var(--muted); }
+</style>
+<rect class="grp" x="340" y="8" width="736" height="116" rx="12"/>
+<text class="gl" x="356" y="30">Bidder.decide()  ·  hard 20 ms deadline</text>
+<text class="note" x="1060" y="30" text-anchor="end">any stage can end it: NoBid(reason)</text>
+<rect class="bg" x="340" y="168" width="736" height="96" rx="12"/>
+<text class="gl" x="356" y="190">Background  ·  ScheduledExecutorService</text>
+<rect class="node" x="0" y="44" width="108" height="60" rx="8"/>
+<text class="t" x="54.0" y="71.0">Ad exchange</text>
+<text class="s" x="54.0" y="89.0">this page</text>
+<rect class="node" x="180" y="44" width="146" height="60" rx="8"/>
+<text class="t" x="253.0" y="71.0">HttpServer</text>
+<text class="s" x="253.0" y="89.0">virtual thread / request</text>
+<rect class="stage" x="356" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="420.0" y="71.0">1 · Match</text>
+<text class="sm" x="420.0" y="89.0">CampaignIndex</text>
+<rect class="stage" x="500" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="564.0" y="71.0">2 · Pace</text>
+<text class="sm" x="564.0" y="89.0">Pacer.throttle</text>
+<path class="solid" d="M484 74 H498" marker-end="url(#ah)"/>
+<rect class="stage" x="644" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="708.0" y="71.0">3 · Freq cap</text>
+<text class="sm" x="708.0" y="89.0">FrequencyCap</text>
+<path class="solid" d="M628 74 H642" marker-end="url(#ah)"/>
+<rect class="stage" x="788" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="852.0" y="71.0">4 · Score + shade</text>
+<text class="sm" x="852.0" y="89.0">Pricing</text>
+<path class="solid" d="M772 74 H786" marker-end="url(#ah)"/>
+<rect class="stage" x="932" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="996.0" y="71.0">5 · Reserve</text>
+<text class="sm" x="996.0" y="89.0">BudgetSlices CAS</text>
+<path class="solid" d="M916 74 H930" marker-end="url(#ah)"/>
+<rect class="node" x="1132" y="44" width="108" height="60" rx="8"/>
+<text class="t" x="1186.0" y="71.0">BudgetService</text>
+<text class="s" x="1186.0" y="89.0">central budget</text>
+<path class="solid" d="M108 74 H178" marker-end="url(#ah)"/>
+<text class="lbl" x="143" y="64" text-anchor="middle">POST /bid</text>
+<path class="solid" d="M326 74 H354" marker-end="url(#ah)"/>
+<path class="solid" d="M1060 74 H1130" marker-end="url(#ah)"/>
+<text class="lbl" x="1095" y="64" text-anchor="middle">lease slice</text>
+<rect class="job" x="356" y="202" width="128" height="50" rx="8"/>
+<text class="t" x="420.0" y="224.0">Index refresh</text>
+<text class="s" x="420.0" y="242.0">every 30 s</text>
+<path class="dotted" d="M420 200 V106" marker-end="url(#ahd)"/>
+<text class="lbl" x="426" y="150" text-anchor="start">swap snapshot</text>
+<rect class="job" x="500" y="202" width="128" height="50" rx="8"/>
+<text class="t" x="564.0" y="224.0">Pacer.step</text>
+<text class="s" x="564.0" y="242.0">every 1 s</text>
+<path class="dotted" d="M564 200 V106" marker-end="url(#ahd)"/>
+<text class="lbl" x="570" y="150" text-anchor="start">throttle</text>
+<rect class="job" x="932" y="202" width="128" height="50" rx="8"/>
+<text class="t" x="996.0" y="224.0">expireLosses</text>
+<text class="s" x="996.0" y="242.0">every 1 s</text>
+<path class="dotted" d="M996 200 V106" marker-end="url(#ahd)"/>
+<text class="lbl" x="990" y="150" text-anchor="end">release lost bids</text>
+<rect class="node" x="744" y="300" width="160" height="60" rx="8"/>
+<text class="t" x="824.0" y="327.0">Bidder.win()</text>
+<text class="s" x="824.0" y="345.0">exactly once per auction</text>
+<path class="solid" d="M54 104 V330 H742" marker-end="url(#ah)"/>
+<text class="lbl" x="66" y="322" text-anchor="start">POST /win</text>
+<path class="solid" d="M760 300 V106" marker-end="url(#ah)"/>
+<text class="lbl" x="766" y="288" text-anchor="start">count impression</text>
+<path class="solid" d="M904 330 H1050 V106" marker-end="url(#ah)"/>
+<text class="lbl" x="1058" y="290" text-anchor="start">refund bid − clearing</text>
+</svg></div>
+</section>
+
+<section class="card" style="margin-top:16px">
+  <h2>Where each piece lives in the Java</h2>
+  <p class="sub">Plain JDK 21, no frameworks. Read in this order. New to modern Java? <a href="https://github.com/henryzhangpku/java-bidder/blob/main/docs/java-since-2015.md">Java since 2015, for Python developers →</a></p>
+  <div class="map" id="map"></div>
+</section>
+
+<footer>Prices are CPM (dollars per 1,000 impressions). Campaigns, budgets and the model are toy values.</footer>
+</div>
+<div id="tip" role="tooltip"></div>
 
 <script>
+const REPO = "https://github.com/henryzhangpku/java-bidder/blob/main/src/main/java/bidder/";
+const CAMPAIGN_META = {
+  c1: "US-CA, US-TX · sports · 15s ad · cap 3/day",
+  c2: "US · kids · 30s ad · 6am–9pm PT · cap 2/day",
+  c3: "US · news · 15s ad · cap 5/day",
+  c4: "US-CA, US-NY · auto or sports · 30s ad · cap 3/day",
+  c5: "US + CA-ON · any audience · 15s ad · cap 4/day",
+  c6: "US · cooking · 15s ad · 8pm–midnight PT · cap 2/day",
+};
+const CODE_MAP = [
+  ["Bidder.java", "The pipeline", "decide(): match → pace → cap → score → shade → reserve. completeOnTimeout() enforces the 20 ms deadline."],
+  ["CampaignIndex.java", "Targeting index", "Immutable snapshot behind an AtomicReference; readers never lock, refresh swaps the pointer."],
+  ["Pacer.java", "Pacing controller", "Runs every second off the hot path; AIMD throttle per campaign that bids only read."],
+  ["FrequencyCap.java", "Frequency cap", "Sliding 24h window per device × campaign in a ConcurrentHashMap, updated with compute()."],
+  ["Pricing.java", "Score and shade", "Toy logistic model; first-price shading bids between the floor and the value."],
+  ["BudgetSlices.java", "Lock-free budget", "Spends leased slices with AtomicLong compare-and-set; overspend bounded by outstanding slices."],
+];
+
 const pick = a => a[Math.floor(Math.random() * a.length)];
 const GEOS = ["US-CA", "US-NY", "US-TX", "CA-ON", "MX-CMX"];
 const SEGMENTS = ["sports", "kids", "news", "auto", "cooking"];
+const $ = id => document.getElementById(id);
+const fmtInt = n => n.toLocaleString("en-US");
+const usd = x => "$" + x.toFixed(2);
+const pct = (a, b) => b ? (100 * a / b).toFixed(1) + "%" : "–";
+
 let local = null; // set when no Java server answers (e.g. on GitHub Pages): see makeLocalBidder below
 const post = (path, body) => local ? Promise.resolve(local.handle(path, body))
   : fetch(path, { method: "POST", body: JSON.stringify(body) }).then(r => r.json());
 const getStats = () => local ? Promise.resolve(local.stats()) : fetch("/stats").then(r => r.json());
 
-function randomRequest(i) {
-  const segs = SEGMENTS.filter(() => Math.random() < 0.35);
+// ---- the "exchange": random requests, some wins, some duplicate win notices ----
+const feed = [];
+function logEvent(e) { feed.unshift({ t: new Date(), ...e }); if (feed.length > 14) feed.length = 14; }
+
+function randomRequest() {
   return {
     auctionId: crypto.randomUUID(),
     deviceId: "dev-" + Math.floor(Math.random() * 300),
     app: pick(["news-app", "kids-tv", "sports-live", "movies"]),
     slotSeconds: pick([15, 30, 60]),
     geo: pick(GEOS),
-    segments: segs,
+    segments: SEGMENTS.filter(() => Math.random() < 0.35),
     floorCpm: +(2 + Math.random() * 6).toFixed(2),
   };
 }
 
-async function oneAuction(i) {
-  const resp = await post("/bid", randomRequest(i));
-  if (!resp.bid || Math.random() > 0.4) return;            // we lost (or did not bid)
+async function oneAuction() {
+  const req = randomRequest();
+  const resp = await post("/bid", req);
+  if (!resp.bid) { logEvent({ id: req.auctionId, kind: "nobid", text: resp.reason.replace("_", " ").toLowerCase() + " · " + req.geo }); return; }
+  if (Math.random() > 0.4) { logEvent({ id: req.auctionId, kind: "bid", text: `bid ${resp.campaignId} at $${resp.priceCpm.toFixed(2)} · lost` }); return; }
   const win = { auctionId: resp.auctionId, campaignId: resp.campaignId,
                 clearingCpm: +(resp.priceCpm * (0.8 + Math.random() * 0.2)).toFixed(4) };
   await post("/win", win);
-  if (Math.random() < 0.05) await post("/win", win);       // exchange retry: must not double charge
+  let dup = false;
+  if (Math.random() < 0.05) { await post("/win", win); dup = true; } // exchange retry: must not double charge
+  logEvent({ id: req.auctionId, kind: "won", dup,
+             text: `won ${resp.campaignId} · bid $${resp.priceCpm.toFixed(2)}, paid $${win.clearingCpm.toFixed(2)}` });
 }
 
-async function blast() {
-  const btn = document.getElementById("go");
-  btn.disabled = true;
+let running = false;
+async function blast(n) {
+  if (running) return;
+  running = true;
+  ["go1k", "go10k", "reset"].forEach(id => $(id).disabled = true);
   const t0 = performance.now();
-  let next = 0;
-  const worker = async () => { while (next < 1000) await oneAuction(next++); };
+  let next = 0, done = 0;
+  const worker = async () => {
+    while (next < n) {
+      next++;
+      await oneAuction();
+      done++;
+      if (done % 25 === 0 || done === n) { $("bar").style.width = (100 * done / n) + "%"; $("status").textContent = `${fmtInt(done)} / ${fmtInt(n)}`; }
+    }
+  };
   await Promise.all(Array.from({ length: 50 }, worker));
-  document.getElementById("status").textContent = `done in ${Math.round(performance.now() - t0)} ms`;
-  btn.disabled = false;
+  $("status").textContent = `${fmtInt(n)} requests in ${fmtInt(Math.round(performance.now() - t0))} ms`;
+  ["go1k", "go10k", "reset"].forEach(id => $(id).disabled = false);
+  running = false;
+  refresh();
 }
 
-const usd = x => "$" + x.toFixed(2);
-const tile = (label, value) => `<div class="tile"><b>${value}</b><span>${label}</span></div>`;
+// ---- rendering ----
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+function renderTiles(s) {
+  const tiles = [
+    ["Requests", fmtInt(s.requests), ""],
+    ["Bid rate", pct(s.bids, s.requests), fmtInt(s.bids) + " bids"],
+    ["Win rate", pct(s.wins, s.bids), fmtInt(s.wins) + " wins"],
+    ["Spend", usd(s.spendUsd), "booked from win notices"],
+    ["Latency p50 / p99", `${s.p50Ms.toFixed(2)} / ${s.p99Ms.toFixed(1)} ms`, "deadline 20 ms"],
+    ["Duplicate wins", fmtInt(s.duplicateWins), "ignored, never charged"],
+  ];
+  $("tiles").replaceChildren(...tiles.map(([label, value, note]) => {
+    const t = el("div", "tile");
+    t.append(el("div", "label", label), el("div", "value", value), el("div", "note", note || " "));
+    return t;
+  }));
+}
+
+function renderFunnel(s) {
+  const r = s.noBidReasons;
+  const stages = [
+    ["Requests", s.requests, null],
+    ["Answered in time", s.requests - r.TIMEOUT, "timed out"],
+    ["Matched targeting", null, "no match", "NO_MATCH"],
+    ["Pacing allowed", null, "paced out", "PACING"],
+    ["Under freq cap", null, "capped", "FREQ_CAP"],
+    ["Value above floor", null, "below floor", "BELOW_FLOOR"],
+    ["Budget reserved = bid", null, "no budget", "BUDGET"],
+  ];
+  for (let i = 2; i < stages.length; i++) stages[i][1] = stages[i - 1][1] - r[stages[i][3]];
+  const max = Math.max(1, s.requests);
+  $("funnel").replaceChildren(...stages.map(([name, count, dropLabel], i) => {
+    const drop = i === 0 ? 0 : stages[i - 1][1] - count;
+    const row = el("div", "frow");
+    row.tabIndex = 0;
+    const bar = el("div", "bar"); bar.style.width = (100 * count / max * 0.72) + "%";
+    const fb = el("div", "fbar");
+    fb.append(bar, el("span", "val", fmtInt(count)));
+    if (drop > 0) fb.append(el("span", "drop", `−${fmtInt(drop)} ${dropLabel}`));
+    row.append(el("div", "fname", name), fb);
+    const tip = [fmtInt(count), `${name} · ${pct(count, s.requests)} of requests` + (drop > 0 ? ` · −${fmtInt(drop)} ${dropLabel}` : "")];
+    row.addEventListener("pointermove", ev => showTip(ev.clientX, ev.clientY, tip));
+    row.addEventListener("pointerleave", hideTip);
+    row.addEventListener("focus", () => { const b = row.getBoundingClientRect(); showTip(b.left + 160, b.top, tip); });
+    row.addEventListener("blur", hideTip);
+    return row;
+  }));
+  $("fnote").textContent = s.requests
+    ? `${fmtInt(s.pendingBids)} bids are waiting on a win notice; with no notice after 5 s the bid counts as lost and its budget is released.`
+    : "";
+}
+
+function renderFeed() {
+  if (!feed.length) return;
+  $("feed").replaceChildren(...feed.map(e => {
+    const row = el("div", "ev " + e.kind);
+    const what = el("span", "what");
+    what.append(el("span", "dot"), el("span", null, e.text));
+    if (e.dup) what.append(el("span", "tag", "dup ignored"));
+    row.append(el("span", "t", e.t.toLocaleTimeString("en-US", { hour12: false })), el("span", "id", e.id.slice(0, 8)), what);
+    return row;
+  }));
+}
+
+function renderCampaigns(s) {
+  $("rows").replaceChildren(...s.campaigns.map(c => {
+    const won = Math.min(100, 100 * c.wonSpendUsd / c.budgetUsd);
+    const reserved = Math.max(0, Math.min(100 - won, 100 * (c.committedUsd - c.wonSpendUsd) / c.budgetUsd));
+    const tr = el("tr");
+    const name = el("td"); name.append(el("div", "cname", `${c.name}`), el("div", "cmeta", CAMPAIGN_META[c.id] || c.id));
+    const spend = el("td");
+    const bar = el("div", "spend");
+    const w = el("div", "won"); w.style.width = won + "%";
+    const rv = el("div", "res"); rv.style.width = reserved + "%";
+    if (won > 0) bar.append(w);
+    if (reserved > 0.2) bar.append(rv);
+    spend.append(bar, el("div", "spendtxt", `${usd(c.wonSpendUsd)} won · ${usd(Math.max(0, c.committedUsd - c.wonSpendUsd))} reserved`));
+    const thr = el("td", "num");
+    const m = el("div", "meter" + (c.throttle === 0 ? " off" : c.throttle < 0.5 ? " low" : ""));
+    const mi = el("div", "m"), mf = el("div"); mf.style.width = (100 * c.throttle) + "%"; mi.append(mf);
+    m.append(mi, el("span", null, c.throttle === 0 ? "stopped" : c.throttle.toFixed(2)));
+    thr.append(m);
+    tr.append(name, spend, el("td", "num", usd(c.budgetUsd)), el("td", "num", usd(c.leasedUsd)), thr);
+    return tr;
+  }));
+}
+
+function renderMap() {
+  $("map").replaceChildren(...CODE_MAP.map(([file, title, desc]) => {
+    const a = el("a"); a.href = REPO + file; a.target = "_blank"; a.rel = "noopener";
+    a.append(el("div", "f", file), el("div", "s", title), el("div", "d", desc));
+    return a;
+  }));
+}
+
+function showTip(x, y, [value, label]) {
+  const t = $("tip");
+  t.replaceChildren(el("b", null, value), el("span", null, label));
+  t.style.display = "block";
+  const w = t.offsetWidth;
+  t.style.left = Math.min(x + 12, innerWidth - w - 8) + "px";
+  t.style.top = (y - t.offsetHeight - 8) + "px";
+}
+function hideTip() { $("tip").style.display = "none"; }
 
 async function refresh() {
-  const s = await getStats();
-  document.getElementById("tiles").innerHTML = [
-    tile("requests", s.requests), tile("bids", s.bids), tile("wins", s.wins),
-    tile("duplicate wins ignored", s.duplicateWins), tile("spend", usd(s.spendUsd)),
-    tile("p50 latency", s.p50Ms.toFixed(2) + " ms"), tile("p99 latency", s.p99Ms.toFixed(2) + " ms"),
-    tile("index version", s.indexVersion), tile("pending bids", s.pendingBids),
-  ].join("");
-  document.getElementById("reasons").innerHTML =
-    Object.entries(s.noBidReasons).map(([k, v]) => tile(k, v)).join("");
-  document.getElementById("rows").innerHTML = s.campaigns.map(c => {
-    const pct = Math.min(100, 100 * c.wonSpendUsd / c.budgetUsd);
-    return `<tr><td>${c.id} ${c.name}</td><td class="num">${usd(c.budgetUsd)}</td>
-      <td class="num">${usd(c.leasedUsd)}</td><td class="num">${usd(c.committedUsd)}</td>
-      <td class="num">${usd(c.wonSpendUsd)}</td>
-      <td><div class="bar"><div style="width:${pct}%"></div></div></td>
-      <td class="num">${c.throttle.toFixed(2)}</td></tr>`;
-  }).join("");
+  try {
+    const s = await getStats();
+    renderTiles(s); renderFunnel(s); renderFeed(); renderCampaigns(s);
+  } catch { /* server restarting: keep the last render */ }
 }
 
 // ---- In-browser port of the Java pipeline, used when no Java server answers (GitHub Pages). ----
@@ -201,7 +596,7 @@ function makeLocalBidder() {
     return { result: "RECORDED" };
   }
 
-  setInterval(() => {                                           // Pacer.step + Bidder.expireLosses
+  const timer = setInterval(() => {                             // Pacer.step + Bidder.expireLosses
     const frac = Math.min(1, (Date.now() - dayStart) / DAY_MS);
     for (const c of campaigns) {
       const spent = get(committed, c.id), t = throttle.get(c.id) ?? 1;
@@ -214,6 +609,7 @@ function makeLocalBidder() {
   }, 1000);
 
   return {
+    stop: () => clearInterval(timer),
     handle: (path, body) => path === "/bid" ? bid(body) : win(body),
     stats() {
       const sorted = [...st.lat].sort((a, b) => a - b), n = sorted.length;
@@ -234,16 +630,26 @@ async function start() {
   try {
     const r = await fetch("/stats");
     if (!r.ok || !(r.headers.get("content-type") || "").includes("json")) throw new Error("no server");
-    document.getElementById("mode").textContent = "Mode: talking to the Java server.";
+    $("mode").classList.add("live");
+    $("modeText").textContent = "Connected to the Java server";
   } catch {
     local = makeLocalBidder();
-    document.getElementById("mode").innerHTML = 'Mode: <b>in-browser simulation</b>: a JavaScript port of the same pipeline, '
-      + 'because GitHub Pages cannot run a JVM. Clone <a href="https://github.com/henryzhangpku/java-bidder">the repo</a> '
-      + 'and run <code>./mvnw -q compile exec:java</code> to drive the real Java server from this page.';
+    $("modeText").textContent = "In-browser simulation";
+    $("mode").title = "GitHub Pages can't run a JVM, so this page runs a JavaScript port of the same pipeline.";
+    $("explain").append(" GitHub Pages can't run a JVM, so here a JavaScript port of the same pipeline answers the requests. Clone the repo and run ",
+      el("code", null, "./mvnw -q compile exec:java"), " to drive the real Java server from this page.");
+    $("reset").hidden = false;
   }
-  document.getElementById("go").addEventListener("click", blast);
+  $("go1k").addEventListener("click", () => blast(1000));
+  $("go10k").addEventListener("click", () => blast(10000));
+  $("reset").addEventListener("click", () => {
+    local.stop(); local = makeLocalBidder(); feed.length = 0;
+    $("feed").replaceChildren(el("div", "empty", "Send requests to see auctions here."));
+    $("bar").style.width = "0"; $("status").textContent = "Idle"; refresh();
+  });
+  renderMap();
   refresh();
-  setInterval(refresh, 1000);
+  setInterval(() => { if (!document.hidden) refresh(); }, 500);
 }
 start();
 </script>

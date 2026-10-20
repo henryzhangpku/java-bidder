@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="376" viewBox="0 0 1240 376" role="img" aria-label="Architecture: the exchange posts bids to HttpServer, which runs the five-stage pipeline (match, pace, frequency cap, score and shade, reserve budget) under a 20 ms deadline. Reserve leases slices from BudgetService. Background jobs refresh the index, update pacing throttles and release lost bids. Win notices go to Bidder.win, which refunds the reservation and counts the impression.">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="ahp"/></marker>
+<marker id="ahd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="ahpd"/></marker>
+</defs>
+<style>
+svg { --raised:#ffffff;--axis:#c3c2b7;--accent:#2a78d6;--accent-track:#e8f0fb;--accent-ink:#1c5cab;--ink:#0b0b0b;--ink-2:#52514e;--muted:#898781;--surface:#ffffff; }
+@media (prefers-color-scheme: dark) { svg { --raised:#201f1e;--axis:#4a4a46;--accent:#3987e5;--accent-track:#15243a;--accent-ink:#86b6ef;--ink:#f0efec;--ink-2:#c3c2b7;--muted:#9a9890;--surface:#0d1117; } }
+.node, .job { fill: var(--raised); stroke: var(--axis); stroke-width: 1; }
+.stage { fill: var(--raised); stroke: var(--accent); stroke-width: 1.5; }
+.grp { fill: var(--accent-track); }
+.bg { fill: none; stroke: var(--axis); stroke-width: 1; }
+.t { fill: var(--ink); font: 600 14px system-ui, -apple-system, sans-serif; text-anchor: middle; }
+.s { fill: var(--muted); font: 12px system-ui, -apple-system, sans-serif; text-anchor: middle; }
+.sm { fill: var(--accent-ink); font: 12px ui-monospace, Menlo, Consolas, monospace; text-anchor: middle; }
+.gl { fill: var(--ink-2); font: 600 12px ui-monospace, Menlo, Consolas, monospace; }
+.note { fill: var(--muted); font: 12px system-ui, -apple-system, sans-serif; }
+.lbl { fill: var(--ink-2); font: 12px system-ui, -apple-system, sans-serif; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.solid { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
+.dotted { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.ahp { fill: var(--ink-2); } .ahpd { fill: var(--muted); }
+</style>
+<rect class="grp" x="340" y="8" width="736" height="116" rx="12"/>
+<text class="gl" x="356" y="30">Bidder.decide()  ·  hard 20 ms deadline</text>
+<text class="note" x="1060" y="30" text-anchor="end">any stage can end it: NoBid(reason)</text>
+<rect class="bg" x="340" y="168" width="736" height="96" rx="12"/>
+<text class="gl" x="356" y="190">Background  ·  ScheduledExecutorService</text>
+<rect class="node" x="0" y="44" width="108" height="60" rx="8"/>
+<text class="t" x="54.0" y="71.0">Ad exchange</text>
+<text class="s" x="54.0" y="89.0">this page</text>
+<rect class="node" x="180" y="44" width="146" height="60" rx="8"/>
+<text class="t" x="253.0" y="71.0">HttpServer</text>
+<text class="s" x="253.0" y="89.0">virtual thread / request</text>
+<rect class="stage" x="356" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="420.0" y="71.0">1 · Match</text>
+<text class="sm" x="420.0" y="89.0">CampaignIndex</text>
+<rect class="stage" x="500" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="564.0" y="71.0">2 · Pace</text>
+<text class="sm" x="564.0" y="89.0">Pacer.throttle</text>
+<path class="solid" d="M484 74 H498" marker-end="url(#ah)"/>
+<rect class="stage" x="644" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="708.0" y="71.0">3 · Freq cap</text>
+<text class="sm" x="708.0" y="89.0">FrequencyCap</text>
+<path class="solid" d="M628 74 H642" marker-end="url(#ah)"/>
+<rect class="stage" x="788" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="852.0" y="71.0">4 · Score + shade</text>
+<text class="sm" x="852.0" y="89.0">Pricing</text>
+<path class="solid" d="M772 74 H786" marker-end="url(#ah)"/>
+<rect class="stage" x="932" y="44" width="128" height="60" rx="8"/>
+<text class="t" x="996.0" y="71.0">5 · Reserve</text>
+<text class="sm" x="996.0" y="89.0">BudgetSlices CAS</text>
+<path class="solid" d="M916 74 H930" marker-end="url(#ah)"/>
+<rect class="node" x="1132" y="44" width="108" height="60" rx="8"/>
+<text class="t" x="1186.0" y="71.0">BudgetService</text>
+<text class="s" x="1186.0" y="89.0">central budget</text>
+<path class="solid" d="M108 74 H178" marker-end="url(#ah)"/>
+<text class="lbl" x="143" y="64" text-anchor="middle">POST /bid</text>
+<path class="solid" d="M326 74 H354" marker-end="url(#ah)"/>
+<path class="solid" d="M1060 74 H1130" marker-end="url(#ah)"/>
+<text class="lbl" x="1095" y="64" text-anchor="middle">lease slice</text>
+<rect class="job" x="356" y="202" width="128" height="50" rx="8"/>
+<text class="t" x="420.0" y="224.0">Index refresh</text>
+<text class="s" x="420.0" y="242.0">every 30 s</text>
+<path class="dotted" d="M420 200 V106" marker-end="url(#ahd)"/>
+<text class="lbl" x="426" y="150" text-anchor="start">swap snapshot</text>
+<rect class="job" x="500" y="202" width="128" height="50" rx="8"/>
+<text class="t" x="564.0" y="224.0">Pacer.step</text>
+<text class="s" x="564.0" y="242.0">every 1 s</text>
+<path class="dotted" d="M564 200 V106" marker-end="url(#ahd)"/>
+<text class="lbl" x="570" y="150" text-anchor="start">throttle</text>
+<rect class="job" x="932" y="202" width="128" height="50" rx="8"/>
+<text class="t" x="996.0" y="224.0">expireLosses</text>
+<text class="s" x="996.0" y="242.0">every 1 s</text>
+<path class="dotted" d="M996 200 V106" marker-end="url(#ahd)"/>
+<text class="lbl" x="990" y="150" text-anchor="end">release lost bids</text>
+<rect class="node" x="744" y="300" width="160" height="60" rx="8"/>
+<text class="t" x="824.0" y="327.0">Bidder.win()</text>
+<text class="s" x="824.0" y="345.0">exactly once per auction</text>
+<path class="solid" d="M54 104 V330 H742" marker-end="url(#ah)"/>
+<text class="lbl" x="66" y="322" text-anchor="start">POST /win</text>
+<path class="solid" d="M760 300 V106" marker-end="url(#ah)"/>
+<text class="lbl" x="766" y="288" text-anchor="start">count impression</text>
+<path class="solid" d="M904 330 H1050 V106" marker-end="url(#ah)"/>
+<text class="lbl" x="1058" y="290" text-anchor="start">refund bid − clearing</text>
+</svg>
