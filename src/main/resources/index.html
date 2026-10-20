@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini Bidder</title>
+<style>
+  :root { --bg: #fafafa; --fg: #1d1d1f; --muted: #666; --line: #ddd; --bar: #6b4fbb; --warn: #c2410c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #eee; --muted: #999; --line: #333; --bar: #9b87f5; } }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 900px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  button { font: inherit; padding: 8px 16px; cursor: pointer; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 16px 0; }
+  .tile { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .tile b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  td.num, th.num { text-align: right; }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 80px; }
+  .bar div { height: 100%; background: var(--bar); }
+  .wrap { overflow-x: auto; }
+  #status { color: var(--muted); margin-left: 8px; }
+</style>
+</head>
+<body>
+<h1>Mini demand-side bidder</h1>
+<p class="sub">Each click plays an exchange: 1,000 bid requests (50 in flight), wins for ~40% of bids, and ~5% duplicate win notices.</p>
+<p class="sub" id="mode"></p>
+<button id="go">Send 1,000 requests</button><span id="status"></span>
+
+<div class="tiles" id="tiles"></div>
+<h2>No-bid reasons</h2>
+<div class="tiles" id="reasons"></div>
+<h2>Campaign spend vs budget</h2>
+<div class="wrap"><table>
+  <thead><tr><th>Campaign</th><th class="num">Budget</th><th class="num">Leased</th><th class="num">Committed</th><th class="num">Won spend</th><th>Won / budget</th><th class="num">Throttle</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+
+<script>
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const GEOS = ["US-CA", "US-NY", "US-TX", "CA-ON", "MX-CMX"];
+const SEGMENTS = ["sports", "kids", "news", "auto", "cooking"];
+let local = null; // set when no Java server answers (e.g. on GitHub Pages): see makeLocalBidder below
+const post = (path, body) => local ? Promise.resolve(local.handle(path, body))
+  : fetch(path, { method: "POST", body: JSON.stringify(body) }).then(r => r.json());
+const getStats = () => local ? Promise.resolve(local.stats()) : fetch("/stats").then(r => r.json());
+
+function randomRequest(i) {
+  const segs = SEGMENTS.filter(() => Math.random() < 0.35);
+  return {
+    auctionId: crypto.randomUUID(),
+    deviceId: "dev-" + Math.floor(Math.random() * 300),
+    app: pick(["news-app", "kids-tv", "sports-live", "movies"]),
+    slotSeconds: pick([15, 30, 60]),
+    geo: pick(GEOS),
+    segments: segs,
+    floorCpm: +(2 + Math.random() * 6).toFixed(2),
+  };
+}
+
+async function oneAuction(i) {
+  const resp = await post("/bid", randomRequest(i));
+  if (!resp.bid || Math.random() > 0.4) return;            // we lost (or did not bid)
+  const win = { auctionId: resp.auctionId, campaignId: resp.campaignId,
+                clearingCpm: +(resp.priceCpm * (0.8 + Math.random() * 0.2)).toFixed(4) };
+  await post("/win", win);
+  if (Math.random() < 0.05) await post("/win", win);       // exchange retry: must not double charge
+}
+
+async function blast() {
+  const btn = document.getElementById("go");
+  btn.disabled = true;
+  const t0 = performance.now();
+  let next = 0;
+  const worker = async () => { while (next < 1000) await oneAuction(next++); };
+  await Promise.all(Array.from({ length: 50 }, worker));
+  document.getElementById("status").textContent = `done in ${Math.round(performance.now() - t0)} ms`;
+  btn.disabled = false;
+}
+
+const usd = x => "$" + x.toFixed(2);
+const tile = (label, value) => `<div class="tile"><b>${value}</b><span>${label}</span></div>`;
+
+async function refresh() {
+  const s = await getStats();
+  document.getElementById("tiles").innerHTML = [
+    tile("requests", s.requests), tile("bids", s.bids), tile("wins", s.wins),
+    tile("duplicate wins ignored", s.duplicateWins), tile("spend", usd(s.spendUsd)),
+    tile("p50 latency", s.p50Ms.toFixed(2) + " ms"), tile("p99 latency", s.p99Ms.toFixed(2) + " ms"),
+    tile("index version", s.indexVersion), tile("pending bids", s.pendingBids),
+  ].join("");
+  document.getElementById("reasons").innerHTML =
+    Object.entries(s.noBidReasons).map(([k, v]) => tile(k, v)).join("");
+  document.getElementById("rows").innerHTML = s.campaigns.map(c => {
+    const pct = Math.min(100, 100 * c.wonSpendUsd / c.budgetUsd);
+    return `<tr><td>${c.id} ${c.name}</td><td class="num">${usd(c.budgetUsd)}</td>
+      <td class="num">${usd(c.leasedUsd)}</td><td class="num">${usd(c.committedUsd)}</td>
+      <td class="num">${usd(c.wonSpendUsd)}</td>
+      <td><div class="bar"><div style="width:${pct}%"></div></div></td>
+      <td class="num">${c.throttle.toFixed(2)}</td></tr>`;
+  }).join("");
+}
+
+// ---- In-browser port of the Java pipeline, used when no Java server answers (GitHub Pages). ----
+// Same steps and constants as Bidder.java, Pricing.java, Pacer.java, BudgetSlices.java; single-threaded,
+// so no CAS is needed here. That difference is the point of the Java version.
+function makeLocalBidder() {
+  const usd = d => Math.round(d * 1e6);
+  const US = ["US-CA", "US-NY", "US-TX"];
+  const C = (id, name, budget, baseCpm, geos, segments, startHour, endHour, creativeSeconds, capPerDay) =>
+    ({ id, name, budgetMicros: usd(budget), baseCpm, geos, segments, startHour, endHour, creativeSeconds, capPerDay });
+  const campaigns = [
+    C("c1", "Sports Drink", 8, 18, ["US-CA", "US-TX"], ["sports"], 0, 24, 15, 3),
+    C("c2", "Kids Cereal", 6, 12, US, ["kids"], 6, 21, 30, 2),
+    C("c3", "News Network", 10, 15, US, ["news"], 0, 24, 15, 5),
+    C("c4", "Auto Lease", 12, 25, ["US-CA", "US-NY"], ["auto", "sports"], 0, 24, 30, 3),
+    C("c5", "Streaming Promo", 5, 9, [...US, "CA-ON"], [], 0, 24, 15, 4),
+    C("c6", "Late Night Snack", 4, 14, US, ["cooking"], 20, 24, 15, 2),
+  ];
+  const SLICE = 500_000, DEADLINE_MS = 20, ALPHA = 0.6, SLOW = 0.01, LOSS_MS = 5_000, DAY_MS = 300_000;
+  const CAP_WINDOW_MS = 86_400_000, BIAS = -0.5, W_SEGMENT = 0.8, W_FIT = 1.0;
+  const dayStart = Date.now();
+  const unleased = new Map(campaigns.map(c => [c.id, c.budgetMicros]));
+  const wallet = new Map(), committed = new Map(), wonSpend = new Map(), throttle = new Map();
+  const capSeen = new Map(), pending = new Map(), settled = new Set();
+  const st = { requests: 0, bids: 0, wins: 0, duplicateWins: 0, spendMicros: 0, lat: [],
+    reasons: { NO_MATCH: 0, PACING: 0, FREQ_CAP: 0, BELOW_FLOOR: 0, BUDGET: 0, TIMEOUT: 0 } };
+  const get = (m, k) => m.get(k) || 0, add = (m, k, v) => m.set(k, get(m, k) + v);
+  const hourFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: "America/Los_Angeles" });
+
+  const matches = (c, r, hour) => c.geos.includes(r.geo)
+    && (c.segments.length === 0 || r.segments.some(s => c.segments.includes(s)))
+    && hour >= c.startHour && hour < c.endHour && c.creativeSeconds <= r.slotSeconds;
+  const score = (c, r) => {                                    // Pricing.score: logistic
+    const z = BIAS + W_SEGMENT * r.segments.filter(s => c.segments.includes(s)).length
+      + W_FIT * c.creativeSeconds / r.slotSeconds;
+    return 1 / (1 + Math.exp(-z));
+  };
+  const shade = (value, floor) => value < floor ? null : floor + Math.round((value - floor) * ALPHA);
+  const capAllows = (device, c) => {
+    const cutoff = Date.now() - CAP_WINDOW_MS;
+    return (capSeen.get(device + "|" + c.id) || []).filter(t => t > cutoff).length < c.capPerDay;
+  };
+  const tryCommit = (id, amount) => {                           // BudgetSlices.tryCommit
+    while (get(wallet, id) < amount) {
+      const grant = Math.min(Math.max(SLICE, amount), get(unleased, id));
+      if (grant <= 0) return false;
+      add(unleased, id, -grant); add(wallet, id, grant);
+    }
+    add(wallet, id, -amount); add(committed, id, amount);
+    return true;
+  };
+
+  function decide(r) {
+    const hour = +hourFmt.format(new Date());
+    const cands = campaigns.filter(c => matches(c, r, hour));
+    if (!cands.length) return "NO_MATCH";
+    const paced = cands.filter(c => Math.random() < (throttle.get(c.id) ?? 1));
+    if (!paced.length) return "PACING";
+    const uncapped = paced.filter(c => capAllows(r.deviceId, c));
+    if (!uncapped.length) return "FREQ_CAP";
+    const offers = uncapped.map(c => {
+      const p = score(c, r);
+      return { c, p, price: shade(Math.round(Math.round(c.baseCpm * 1000) * p), r.floorMicros) };
+    }).filter(o => o.price !== null).sort((a, b) => b.price - a.price);
+    if (!offers.length) return "BELOW_FLOOR";
+    for (const o of offers) {
+      if (tryCommit(o.c.id, o.price)) {
+        pending.set(r.auctionId, { campaignId: o.c.id, deviceId: r.deviceId, price: o.price, created: Date.now() });
+        return { auctionId: r.auctionId, bid: true, campaignId: o.c.id, priceCpm: o.price / 1000, score: o.p };
+      }
+    }
+    return "BUDGET";
+  }
+
+  function bid(body) {
+    const r = { ...body, floorMicros: Math.round(body.floorCpm * 1000) };
+    const t0 = performance.now();
+    let resp = Math.random() < SLOW ? "TIMEOUT" : decide(r);  // simulated slow dependency
+    const ms = resp === "TIMEOUT" ? DEADLINE_MS : performance.now() - t0;
+    st.requests++;
+    st.lat.push(ms); if (st.lat.length > 8192) st.lat.shift();
+    if (typeof resp === "string") { st.reasons[resp]++; resp = { auctionId: r.auctionId, bid: false, reason: resp }; }
+    else st.bids++;
+    return resp;
+  }
+
+  function win({ auctionId, campaignId, clearingCpm }) {       // Bidder.win: exactly once per auction
+    const p = pending.get(auctionId);
+    if (!p) return { result: settled.has(auctionId) ? (st.duplicateWins++, "DUPLICATE") : "UNKNOWN_AUCTION" };
+    if (p.campaignId !== campaignId) return { result: "UNKNOWN_AUCTION" };
+    settled.add(auctionId); pending.delete(auctionId);
+    const clearing = Math.min(Math.round(clearingCpm * 1000), p.price);
+    add(wallet, campaignId, p.price - clearing); add(committed, campaignId, clearing - p.price);
+    const key = p.deviceId + "|" + campaignId;
+    capSeen.set(key, [...(capSeen.get(key) || []), Date.now()]);
+    st.wins++; st.spendMicros += clearing; add(wonSpend, campaignId, clearing);
+    return { result: "RECORDED" };
+  }
+
+  setInterval(() => {                                           // Pacer.step + Bidder.expireLosses
+    const frac = Math.min(1, (Date.now() - dayStart) / DAY_MS);
+    for (const c of campaigns) {
+      const spent = get(committed, c.id), t = throttle.get(c.id) ?? 1;
+      throttle.set(c.id, spent >= c.budgetMicros ? 0 : spent > c.budgetMicros * frac ? t * 0.7 : Math.min(1, t + 0.1));
+    }
+    const cutoff = Date.now() - LOSS_MS;
+    for (const [id, p] of pending) if (p.created <= cutoff) {
+      pending.delete(id); add(wallet, p.campaignId, p.price); add(committed, p.campaignId, -p.price);
+    }
+  }, 1000);
+
+  return {
+    handle: (path, body) => path === "/bid" ? bid(body) : win(body),
+    stats() {
+      const sorted = [...st.lat].sort((a, b) => a - b), n = sorted.length;
+      return {
+        requests: st.requests, bids: st.bids, wins: st.wins, duplicateWins: st.duplicateWins,
+        spendUsd: st.spendMicros / 1e6, noBidReasons: st.reasons,
+        p50Ms: n ? sorted[Math.floor(n / 2)] : 0, p99Ms: n ? sorted[Math.min(n - 1, Math.floor(n * 0.99))] : 0,
+        indexVersion: 1, pendingBids: pending.size,
+        campaigns: campaigns.map(c => ({ id: c.id, name: c.name, budgetUsd: c.budgetMicros / 1e6,
+          leasedUsd: (c.budgetMicros - get(unleased, c.id)) / 1e6, committedUsd: get(committed, c.id) / 1e6,
+          wonSpendUsd: get(wonSpend, c.id) / 1e6, throttle: throttle.get(c.id) ?? 1 })),
+      };
+    },
+  };
+}
+
+async function start() {
+  try {
+    const r = await fetch("/stats");
+    if (!r.ok || !(r.headers.get("content-type") || "").includes("json")) throw new Error("no server");
+    document.getElementById("mode").textContent = "Mode: talking to the Java server.";
+  } catch {
+    local = makeLocalBidder();
+    document.getElementById("mode").innerHTML = 'Mode: <b>in-browser simulation</b>: a JavaScript port of the same pipeline, '
+      + 'because GitHub Pages cannot run a JVM. Clone <a href="https://github.com/henryzhangpku/java-bidder">the repo</a> '
+      + 'and run <code>./mvnw -q compile exec:java</code> to drive the real Java server from this page.';
+  }
+  document.getElementById("go").addEventListener("click", blast);
+  refresh();
+  setInterval(refresh, 1000);
+}
+start();
+</script>
+</body>
+</html>
