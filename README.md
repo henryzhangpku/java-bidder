@@ -1,6 +1,8 @@
+<p align="center"><img src="docs/logo.svg" width="80" alt="java-bidder logo"></p>
+
 # java-bidder: a mini demand-side bidder in plain modern Java
 
-**Live demo: https://henryzhangpku.github.io/java-bidder/** (in-browser simulation; see below)
+**Live demo: https://henryzhangpku.github.io/java-bidder/**: a live auction-flow animation, latency histogram and throughput chart, driven by an in-browser port of the pipeline (or by the real Java server when you run it locally; see below).
 
 A small demand-side (DSP) bidder for real-time ad auctions: an in-memory campaign
 index, frequency caps, leased budget slices, a pacing controller, a logistic score, first-price
@@ -187,6 +189,11 @@ out. It works for any `AutoCloseable`: `HttpExchange`, `InputStream`, and `Execu
   (G1 by default; ZGC/Shenandoah for sub-ms pauses) keep pauses short; your p99 still shows them.
   Levers: allocate less on the hot path (primitives over boxed `Long`, reuse buffers), size the
   heap, pick ZGC (`-XX:+UseZGC`), and watch GC logs next to latency.
+- *Nagle's algorithm.* The JDK's built-in `HttpServer` leaves Nagle on, so on a keep-alive
+  connection a small response can sit waiting for the client's delayed ACK. The demo page's latency
+  histogram showed round trips of ~44 ms against a sub-millisecond decision; setting
+  `sun.net.httpserver.nodelay=true` in `Server.main` brought keep-alive `POST /bid` to a p50 of
+  ~0.6 ms. Measure at the client, not only inside the server.
 - *Memory.* Objects carry headers; `Long` costs ~16 bytes vs 8 for `long`. That's why money is a
   `long` of micros here, never `double` (rounding) and never `Long` in hot maps if avoidable.
 

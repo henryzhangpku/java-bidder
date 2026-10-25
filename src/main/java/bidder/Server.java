@@ -46,6 +46,10 @@ public final class Server {
 
     public static void main(String[] args) throws IOException {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
+        // Disable Nagle on accepted sockets. Without this, small responses on a
+        // keep-alive connection wait for the client's delayed ACK (~40 ms),
+        // which dwarfs the bidder's own sub-millisecond decision time.
+        System.setProperty("sun.net.httpserver.nodelay", "true");
         Clock clock = Clock.system(ZoneId.of("America/Los_Angeles")); // dayparts in Pacific time
 
         List<Campaign> campaigns = seedCampaigns();
